@@ -15,7 +15,7 @@ Golang script designed to scrape both HTTP and SOCKS proxy information from publ
 ## Usage
 1. Clone this repository:
 ```sh
-git clone https://github.com/Isloka/proxyscraper.git
+git clone https://github.com/variableninja/proxyscraper.git
 cd proxyscraper
 ```
 2. Build the Go programs
