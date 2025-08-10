@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"os"
 )
-
+// scrape it correctly man.
 func main() {
 	urls := []string{
 		"https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-https.txt",
