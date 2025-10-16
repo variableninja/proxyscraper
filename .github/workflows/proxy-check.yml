@@ -1,0 +1,114 @@
+name: Proxy Check & Build PAC
+
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: "0 2 * * *" # هر روز ساعت 02:00 UTC (در صورت نیاز تغییر بده)
+  workflow_dispatch:
+
+jobs:
+  proxy-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up environment
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends curl git ca-certificates
+
+      - name: Download proxy lists
+        env:
+          HTTP_LIST: https://raw.githubusercontent.com/vAHiD55555/ProxyScraper_/refs/heads/main/proxies/http.txt
+          SOCKS_LIST: https://raw.githubusercontent.com/vAHiD55555/ProxyScraper_/refs/heads/main/proxies/socks.txt
+        run: |
+          mkdir -p tmp
+          echo "[*] fetching http list..."
+          curl -fsSL "$HTTP_LIST" -o tmp/http.txt || true
+          echo "[*] fetching socks5 list..."
+          curl -fsSL "$SOCKS_LIST" -o tmp/socks5.txt || true
+          wc -l tmp/*.txt || true
+
+      - name: Add script
+        run: |
+          mkdir -p scripts
+          cat > scripts/check_and_make_pac.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+TIMEOUT=8
+CHECK_URL="https://api.ipify.org"
+OUT_PAC="proxies.pac"
+OK_LIST="proxies_ok.txt"
+BAD_LIST="proxies_failed.txt"
+TMPDIR="tmp"
+MAX_JOBS=12
+
+# normalize and merge lists
+rm -f "$OK_LIST" "$BAD_LIST" "$OUT_PAC"
+touch "$OK_LIST" "$BAD_LIST"
+
+merge_files() {
+  local f="$1"
+  if [[ -f "$f" ]]; then
+    # remove blanks and comments, trim
+    sed 's/#.*//g' "$f" | awk '{$1=$1};1' | grep -E '.+' || true
+  fi
+}
+
+echo "[*] reading local external IP..."
+LOCAL_IP=$(curl -s --max-time $TIMEOUT $CHECK_URL || echo "unknown")
+echo "LOCAL_IP=$LOCAL_IP"
+
+# build proxy array
+PROXIES=()
+
+for line in $(merge_files "$TMPDIR/http.txt"); do
+  PROXIES+=("$line")
+done
+for line in $(merge_files "$TMPDIR/socks5.txt"); do
+  PROXIES+=("$line")
+done
+
+# also allow proxies in repo root proxies.txt if present
+if [[ -f "proxies.txt" ]]; then
+  while IFS= read -r l; do
+    [[ -z "$l" ]] && continue
+    PROXIES+=("$l")
+  done < proxies.txt
+fi
+
+echo "[*] total candidate proxies: ${#PROXIES[@]}"
+
+# function to test one proxy
+test_proxy_once() {
+  proxy="$1"
+  # normalize: ensure schema
+  proto=""
+  target="$proxy"
+  if [[ "$proxy" =~ ^socks5?:// ]]; then
+    proto="socks5"
+    target="${proxy#*://}"
+  elif [[ "$proxy" =~ ^https?:// ]]; then
+    proto="http"
+    target="${proxy#*://}"
+  elif echo "$proxy" | grep -q ':'; then
+    proto="http"
+    target="$proxy"
+  else
+    return 1
+  fi
+
+  if [[ "$proto" == "socks5" ]]; then
+    curl_opts=(--socks5-hostname "$target")
+  else
+    curl_opts=(-x "http://$target")
+  fi
+
+  # try to get external IP via that proxy
+  out=$(curl -s "${curl_opts[@]}" --max-time $TIMEOUT --connect-timeout $TIMEOUT "$CHECK_URL" 2>/dev/null || echo "")
+  if
